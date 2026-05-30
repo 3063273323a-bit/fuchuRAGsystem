@@ -4,4 +4,3 @@ openai
 python-dotenv
 numpy
 sentence_transformers
-os
