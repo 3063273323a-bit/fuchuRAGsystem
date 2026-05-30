@@ -44,9 +44,7 @@ db_client = init_vector_db()
 embedding_client = get_embedding_client()
 
 # 动态创建/获取当前用户专属的 Collection
-raw_session_id = st.session_state.user_session_id
-safe_session_id = raw_session_id.replace('-', '_')
-collection_name = "user_" + safe_session_id
+collection_name = f"user_{st.session_state.user_session_id.replace('-', '_')}"
 chromadb_collection = db_client.get_or_create_collection(name=collection_name)
 
 
@@ -68,7 +66,7 @@ def embed_chunks_via_api(chunks: List[str]) -> list:
         )
         return [item.embedding for item in response.data]
     except Exception as e:
-        st.error("❌ 向量化失败，请检查 Embedding API 配置: " + str(e))
+        st.error(f"❌ 向量化失败，请检查 Embedding API 配置: {e}")
         return []
 
 def retrieve(query: str, top_k: int) -> List[dict]:
@@ -120,20 +118,18 @@ def rerank_via_api(query: str, retrieved_items: List[dict], top_k: int) -> List[
             reranked_items.append(retrieved_items[idx])
         return reranked_items
     except Exception as e:
-        st.warning("⚠️ Rerank 失败，已降级使用初筛顺序。错误: " + str(e))
+        st.warning(f"⚠️ Rerank 失败，已降级使用初筛顺序。错误: {e}")
         return retrieved_items[:top_k]
 
 def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
     """调用 DeepSeek 思考模型生成最终答案"""
-    context_text = "\n\n".join(chunks)
-    
-    system_prompt = "你是一个专业的企业AI转型资讯顾问，需要根据用户的问题和提供的参考文档回答用户的问题，给出合理的资讯建议。\n" \
-                    "用户问题：{}\n" \
-                    "参考文档：{}\n" \
-                    "要求：\n" \
-                    "1. 尽量使用参考文档里的信息回答。\n" \
-                    "2. 回答要清晰、有条理，不要编造信息。\n" \
-                    "3. 标注引用的参考文档。".format(query, context_text)
+    system_prompt = f"""你是一个专业的企业AI转型资讯顾问，需要根据用户的问题和提供的参考文档回答用户的问题，给出合理的资讯建议。
+    用户问题：{query}
+    参考文档：{"\n\n".join(chunks)}
+    要求：
+    1. 尽量使用参考文档里的信息回答。
+    2. 回答要清晰、有条理，不要编造信息。
+    3. 标注引用的参考文档。"""
 
     try:
         response = client.chat.completions.create(
@@ -143,16 +139,14 @@ def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
         )
         return response.choices[0].message.content or "抱歉，我无法生成答案。"
     except Exception as e:
-        return "❌ 调用 DeepSeek 失败: " + str(e)
+        return f"❌ 调用 DeepSeek 失败: {e}"
 
 
 # --- 4. Streamlit 前端交互界面 ---
 with st.sidebar:
     st.header("⚙️ 配置中心")
     api_key = st.text_input("DeepSeek API Key", value=os.getenv("OPENAI_API_KEY", ""), type="password")
-    
-    short_session_id = st.session_state.user_session_id[:8]
-    st.caption("🔒 您的专属会话隔离ID: " + short_session_id + "...")
+    st.caption(f"🔒 您的专属会话隔离ID: {st.session_state.user_session_id[:8]}...")
     
     st.divider()
     
@@ -167,7 +161,7 @@ with st.sidebar:
             try:
                 content = file_bytes.decode('gbk')
             except Exception as e:
-                st.error("❌ 文件解码失败：" + str(e))
+                st.error(f"❌ 文件解码失败：{e}")
                 st.stop()
 
         if not content.strip():
@@ -181,8 +175,7 @@ with st.sidebar:
             if not embeddings:
                 st.stop()
                 
-            base_id = st.session_state.user_session_id
-            ids = [base_id + "_" + str(i) for i in range(len(chunks))]
+            ids = [f"{st.session_state.user_session_id}_{i}" for i in range(len(chunks))]
             
             metadatas = []
             for chunk in chunks:
@@ -196,7 +189,7 @@ with st.sidebar:
                 embeddings=embeddings,
                 metadatas=metadatas        
             )
-        st.success("入库成功！您的专属知识库已存入 " + str(len(chunks)) + " 个完整知识板块。")
+        st.success(f"入库成功！您的专属知识库已存入 {len(chunks)} 个完整知识板块。")
 
 # 主界面：对话历史渲染
 if "messages" not in st.session_state:
@@ -233,6 +226,6 @@ if prompt := st.chat_input("询问关于企业AI转型的问题..."):
             
             with st.expander("查看本次回答参考的原始知识切片"):
                 for i, item in enumerate(final_items):
-                    st.info("参考内容 " + str(i+1) + ":\n\n" + item['text'])
+                    st.info(f"参考内容 {i+1}:\n\n{item['text']}")
                     if item['url'] != "无":
-                        st.markdown("🔗 **文章原链:** [" + item['url'] + "](" + item['url'] + ")")
+                        st.markdown(f"🔗 **文章原链:** [{item['url']}]({item['url']})")
