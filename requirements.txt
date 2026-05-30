@@ -3,4 +3,3 @@ chromadb
 openai
 python-dotenv
 numpy
-sentence_transformers
