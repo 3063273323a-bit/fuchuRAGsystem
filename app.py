@@ -1,7 +1,4 @@
 import os
-# 必须在所有库导入前设置，解决 Python 环境下 protobuf 导致的崩溃隐患
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
-
 import streamlit as st
 import chromadb
 import numpy as np
