@@ -1,5 +1,5 @@
 import os
-# 【关键修复】必须在所有库导入前设置，解决 Python 3.14 环境下 protobuf 导致的 TypeError 崩溃
+# 必须在所有库导入前设置，解决 Python 环境下 protobuf 导致的崩溃隐患
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 import streamlit as st
@@ -16,12 +16,12 @@ load_dotenv()
 st.set_page_config(page_title="复初企业AI转型咨询助手", layout="wide")
 st.title("🤖 复初企业AI转型知识咨询系统 (公域生产版)")
 
-# 【多用户隔离】初始化独一无二的 Session ID，确保不同浏览器标签页（不同用户）的数据完全独立
+# 初始化独一无二的 Session ID，确保不同浏览器标签页（不同用户）的数据完全独立
 if "user_session_id" not in st.session_state:
     import uuid
     st.session_state.user_session_id = str(uuid.uuid4())
 
-# --- 2. 统一的云端 API 客户端初始化 (避免本地运行模型爆内存) ---
+# --- 2. 统一的云端 API 客户端初始化 ---
 
 @st.cache_resource
 def get_llm_client(api_key: str):
@@ -30,11 +30,8 @@ def get_llm_client(api_key: str):
 
 @st.cache_resource
 def get_embedding_client():
-    """
-    云端向量化/重排客户端（以硅基流动为例，你可以替换为任意 OpenAI 格式兼容的平台）
-    从 st.secrets 或环境变量中安全读取 API Key，不要硬编码在代码里
-    """
-    api_key = os.getenv("sk-xkdxajipiwptbupuvnbmswcvuunrvlsbzwltjktnfnjgkjiz", "请在Streamlit后台配置或此处填写你的KEY")
+    """云端向量化/重排客户端（以硅基流动为例）"""
+    api_key = os.getenv("SILICONFLOW_API_KEY", "请在此处或环境变量中填写Key")
     return OpenAI(api_key=api_key, base_url="https://api.siliconflow.cn/v1")
 
 @st.cache_resource
@@ -46,31 +43,32 @@ def init_vector_db():
 db_client = init_vector_db()
 embedding_client = get_embedding_client()
 
-# 为当前用户动态创建/获取专属的 Collection（ChromaDB 命名限制：只能包含字母数字下划线，3-63位）
-collection_name = f"user_{st.session_state.user_session_id.replace('-', '_')}"
+# 动态创建/获取当前用户专属的 Collection
+raw_session_id = st.session_state.user_session_id
+safe_session_id = raw_session_id.replace('-', '_')
+collection_name = "user_" + safe_session_id
 chromadb_collection = db_client.get_or_create_collection(name=collection_name)
 
 
-# --- 3. 核心 RAG 功能函数（全面 API 化） ---
+# --- 3. 核心 RAG 功能函数 ---
 
 def split_into_chunks(content: str) -> List[str]:
-    """保持你原有的文本切分逻辑不变"""
+    """文本切分逻辑"""
     cleaned_content = re.sub(r'\s*', '', content)
     chunks = re.split(r'(?=【\d{4}\.\d{1,2}\.\d{1,2}.*?】)', cleaned_content)
     final_chunks = [chunk.strip() for chunk in chunks if chunk.strip()]
     return final_chunks
 
 def embed_chunks_via_api(chunks: List[str]) -> list:
-    """【替代本地模型】调用在线 API 生成文本向量"""
+    """调用在线 API 生成文本向量"""
     try:
-        # 使用硅基流动的免费/高性价比模型 BAAI/bge-m3（1024维度，完美平替）
         response = embedding_client.embeddings.create(
             model="BAAI/bge-m3",
             input=chunks
         )
         return [item.embedding for item in response.data]
     except Exception as e:
-        st.error(f"❌ 向量化失败，请检查 Embedding API 配置: {e}")
+        st.error("❌ 向量化失败，请检查 Embedding API 配置: " + str(e))
         return []
 
 def retrieve(query: str, top_k: int) -> List[dict]:
@@ -98,14 +96,13 @@ def retrieve(query: str, top_k: int) -> List[dict]:
     return retrieved_data
 
 def rerank_via_api(query: str, retrieved_items: List[dict], top_k: int) -> List[dict]:
-    """【替代本地模型】调用在线 Rerank API"""
+    """调用在线 Rerank API"""
     if not retrieved_items: 
         return []
     
     documents_to_rank = [item["text"] for item in retrieved_items]
     
     try:
-        # 调用标准重排服务（以硅基流动的 BAAI/bge-reranker-v2-m3 为例）
         response = embedding_client.post(
             "/rerank",
             json={
@@ -123,35 +120,39 @@ def rerank_via_api(query: str, retrieved_items: List[dict], top_k: int) -> List[
             reranked_items.append(retrieved_items[idx])
         return reranked_items
     except Exception as e:
-        # 如果重排 API 出错，提供优雅降级：直接截取初筛的前 top_k 个
-        st.warning(f"⚠️ Rerank 失败，已降级使用初筛顺序。错误: {e}")
+        st.warning("⚠️ Rerank 失败，已降级使用初筛顺序。错误: " + str(e))
         return retrieved_items[:top_k]
 
 def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
     """调用 DeepSeek 思考模型生成最终答案"""
-    system_prompt = f"""你是一个专业的企业AI转型资讯顾问，需要根据用户的问题和提供的参考文档回答用户的问题，给出合理的资讯建议。
-    用户问题：{query}
-    参考文档：{"\n\n".join(chunks)}
-    要求：
-    1. 尽量使用参考文档里的信息回答。
-    2. 回答要清晰、有条理，不要编造信息。
-    3. 标注引用的参考文档。"""
+    context_text = "\n\n".join(chunks)
+    
+    system_prompt = "你是一个专业的企业AI转型资讯顾问，需要根据用户的问题和提供的参考文档回答用户的问题，给出合理的资讯建议。\n" \
+                    "用户问题：{}\n" \
+                    "参考文档：{}\n" \
+                    "要求：\n" \
+                    "1. 尽量使用参考文档里的信息回答。\n" \
+                    "2. 回答要清晰、有条理，不要编造信息。\n" \
+                    "3. 标注引用的参考文档。".format(query, context_text)
+
     try:
         response = client.chat.completions.create(
-            model="deepseek-reasoner", # 保持你的 deepseek-reasoner 架构
+            model="deepseek-reasoner",
             messages=[{"role": "system", "content": system_prompt}],
             temperature=0.7
         )
         return response.choices[0].message.content or "抱歉，我无法生成答案。"
     except Exception as e:
-        return f"❌ 调用 DeepSeek 失败: {e}"
+        return "❌ 调用 DeepSeek 失败: " + str(e)
 
 
 # --- 4. Streamlit 前端交互界面 ---
 with st.sidebar:
     st.header("⚙️ 配置中心")
     api_key = st.text_input("DeepSeek API Key", value=os.getenv("OPENAI_API_KEY", ""), type="password")
-    st.caption(f"🔒 您的专属会话隔离ID: {st.session_state.user_session_id[:8]}...")
+    
+    short_session_id = st.session_state.user_session_id[:8]
+    st.caption("🔒 您的专属会话隔离ID: " + short_session_id + "...")
     
     st.divider()
     
@@ -166,7 +167,7 @@ with st.sidebar:
             try:
                 content = file_bytes.decode('gbk')
             except Exception as e:
-                st.error(f"❌ 文件解码失败：{e}")
+                st.error("❌ 文件解码失败：" + str(e))
                 st.stop()
 
         if not content.strip():
@@ -180,7 +181,8 @@ with st.sidebar:
             if not embeddings:
                 st.stop()
                 
-            ids = [f"{st.session_state.user_session_id}_{i}" for i in range(len(chunks))]
+            base_id = st.session_state.user_session_id
+            ids = [base_id + "_" + str(i) for i in range(len(chunks))]
             
             metadatas = []
             for chunk in chunks:
@@ -194,9 +196,9 @@ with st.sidebar:
                 embeddings=embeddings,
                 metadatas=metadatas        
             )
-        st.success(f"入库成功！您的专属知识库已存入 {len(chunks)} 个完整知识板块。")
+        st.success("入库成功！您的专属知识库已存入 " + str(len(chunks)) + " 个完整知识板块。")
 
-# 主界面：流式聊天对话框
+# 主界面：对话历史渲染
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -231,6 +233,6 @@ if prompt := st.chat_input("询问关于企业AI转型的问题..."):
             
             with st.expander("查看本次回答参考的原始知识切片"):
                 for i, item in enumerate(final_items):
-                    st.info(f"参考内容 {i+1}:\n\n{item['text']}")
+                    st.info("参考内容 " + str(i+1) + ":\n\n" + item['text'])
                     if item['url'] != "无":
-                        st.markdown(f"🔗 **文章原链:** [{item['url']}]({item['url']})")
+                        st.markdown("🔗 **文章原链:** [" + item['url'] + "](" + item['url'] + ")")
