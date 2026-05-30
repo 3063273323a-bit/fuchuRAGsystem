@@ -158,7 +158,7 @@ with st.sidebar:
     if uploaded_file and st.button("开始解析并入库"):
         file_bytes = uploaded_file.getvalue()
         try:
-            content = file_bytes.decode('utf-8')
+            content = file_bytes.decode('utf-16')
         except UnicodeDecodeError:
             try:
                 content = file_bytes.decode('gbk')
