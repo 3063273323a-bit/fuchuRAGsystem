@@ -135,7 +135,7 @@ def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
     要求：
     1. 尽量使用参考文档里的信息回答。
     2. 回答要清晰、有条理，不要编造信息。
-    3. 标注引用的参考文档。"""
+    3. 标注引用的参考文档"""
 
     try:
         response = client.chat.completions.create(
