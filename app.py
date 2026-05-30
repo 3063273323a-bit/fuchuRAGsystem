@@ -123,13 +123,18 @@ def rerank_via_api(query: str, retrieved_items: List[dict], top_k: int) -> List[
 
 def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
     """调用 DeepSeek 思考模型生成最终答案"""
-    system_prompt = f"""你是一个专业的企业AI转型资讯顾问，需要根据用户的问题和提供的参考文档回答用户的问题，给出合理的资讯建议。
-    用户问题：{query}
-    参考文档：{"\n\n".join(chunks)}
-    要求：
-    1. 尽量使用参考文档里的信息回答。
-    2. 回答要清晰、有条理，不要编造信息。
-    3. 标注引用的参考文档。"""
+    # 1. 先在外层把参考文档合并好，不用任何大括号或复杂拼接
+    context_text = "\n\n".join(chunks)
+    
+    # 2. 严格使用三双引号开头，三双引号结尾（彻底杜绝单双引号不匹配导致的闭合错误）
+    # 3. 放弃在大括号里写任何逻辑，改用最传统的 .format() 动态注入变量
+    system_prompt = """你是一个专业的企业AI转型资讯顾问，需要根据用户的问题和提供的参考文档回答用户的问题，给出合理的资讯建议。
+用户问题：{}
+参考文档：{}
+要求：
+1. 尽量使用参考文档里的信息回答。
+2. 回答要清晰、有条理，不要编造信息。
+3. 标注引用的参考文档。""".format(query, context_text)
 
     try:
         response = client.chat.completions.create(
@@ -139,7 +144,7 @@ def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
         )
         return response.choices[0].message.content or "抱歉，我无法生成答案。"
     except Exception as e:
-        return f"❌ 调用 DeepSeek 失败: {e}"
+        return "❌ 调用 DeepSeek 失败: " + str(e)
 
 
 # --- 4. Streamlit 前端交互界面 ---
