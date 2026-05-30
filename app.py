@@ -34,7 +34,7 @@ def get_embedding_client():
     云端向量化/重排客户端（以硅基流动为例，你可以替换为任意 OpenAI 格式兼容的平台）
     从 st.secrets 或环境变量中安全读取 API Key，不要硬编码在代码里
     """
-    api_key = os.getenv("SILICONFLOW_API_KEY", "请在Streamlit后台配置或此处填写你的KEY")
+    api_key = os.getenv("sk-xkdxajipiwptbupuvnbmswcvuunrvlsbzwltjktnfnjgkjiz", "请在Streamlit后台配置或此处填写你的KEY")
     return OpenAI(api_key=api_key, base_url="https://api.siliconflow.cn/v1")
 
 @st.cache_resource
