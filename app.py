@@ -40,9 +40,7 @@ def init_vector_db():
 db_client = init_vector_db()
 embedding_client = get_embedding_client()
 
-# 动态创建/获取当前用户专属的 Collection
-collection_name = f"user_{st.session_state.user_session_id.replace('-', '_')}"
-chromadb_collection = db_client.get_or_create_collection(name=collection_name)
+
 
 
 # --- 3. 核心 RAG 功能函数 ---
