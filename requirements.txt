@@ -3,7 +3,5 @@ chromadb
 openai
 python-dotenv
 numpy
-typing
 sentence_transformers
-re
 os
