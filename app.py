@@ -33,10 +33,30 @@ def get_embedding_client():
 embedding_client = get_embedding_client()
 
 def split_into_chunks(content: str) -> List[str]:
-    """文本切分逻辑"""
-    cleaned_content = re.sub(r'\s*', '', content)
-    chunks = re.split(r'(?=【\d{4}\.\d{1,2}\.\d{1,2}.*?】)', cleaned_content)
-    return [chunk.strip() for chunk in chunks if chunk.strip()]
+    """带有安全过滤与长度截断的文档切分逻辑"""
+    # 1. 基础的时间戳逻辑切分
+    # 注意：移除 re.sub(r'\s*', '', content) 块，保留正常的段落换行可以有效维持语义，只去除两端空白
+    chunks = re.split(r'(?=【\d{4}\.\d{1,2}\.\d{1,2}.*?】)', content)
+    
+    valid_chunks = []
+    for chunk in chunks:
+        chunk_clean = chunk.strip()
+        
+        # 【防御1】：彻底杜绝长度为 0 的虚无切片进入接口
+        if not chunk_clean:
+            continue
+            
+        # 【防御2】：如果某一段由于缺少标记导致极长，强制按每 4000 字进行二次均分截断
+        # 4000字符能保留极佳语义，且远远低于百炼的 8192 封顶值，绝不踩雷
+        if len(chunk_clean) > 4000:
+            for i in range(0, len(chunk_clean), 4000):
+                sub_chunk = chunk_clean[i:i+4000]
+                if sub_chunk.strip():
+                    valid_chunks.append(sub_chunk.strip())
+        else:
+            valid_chunks.append(chunk_clean)
+            
+    return valid_chunks
 
 @st.cache_resource
 def init_fixed_vector_db():
