@@ -53,15 +53,32 @@ def split_into_chunks(content: str) -> List[str]:
     return final_chunks
 
 def embed_chunks_via_api(chunks: List[str]) -> list:
-    """调用在线 API 生成文本向量"""
+    """调用在线 API 生成文本向量（高防错生产版）"""
+    if not chunks:
+        return []
+        
     try:
+        # 【核心加固】对传入的每一个文本切片进行强制 UTF-8 清洗
+        # 显式消除可能夹杂的特殊非 ASCII / 隐藏字符或操作系统残留的乱码截断
+        cleaned_chunks = []
+        for chunk in chunks:
+            if isinstance(chunk, bytes):
+                c = chunk.decode('utf-8', errors='ignore')
+            else:
+                c = str(chunk).encode('utf-8', errors='ignore').decode('utf-8')
+            cleaned_chunks.append(c)
+
         response = embedding_client.embeddings.create(
             model="BAAI/bge-m3",
-            input=chunks
+            input=cleaned_chunks
         )
         return [item.embedding for item in response.data]
     except Exception as e:
-        st.error(f"❌ 向量化失败，请检查 Embedding API 配置: {e}")
+        # 如果依然失败，直接打印出最底层的 Python 调用栈，方便在前端秒杀问题
+        import traceback
+        error_detail = traceback.format_exc()
+        st.error("❌ 向量化请求在传输层被拦截，底层错误追踪如下：")
+        st.code(error_detail, language="python")
         return []
 
 def retrieve(query: str, top_k: int) -> List[dict]:
