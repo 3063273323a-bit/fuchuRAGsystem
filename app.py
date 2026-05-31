@@ -47,7 +47,7 @@ def init_fixed_vector_db():
     if collection.count() == 0:
         filename = "AI领导力洞察-社区简版.md"
         if os.path.exists(filename):
-            with open(filename, "r", encoding="utf-8") as f:
+            with open(filename, "r", encoding="utf-16") as f:
                 content = f.read()
             chunks = split_into_chunks(content)
             
