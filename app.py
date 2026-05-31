@@ -10,15 +10,10 @@ from dotenv import load_dotenv
 # --- 1. 环境与配置初始化 ---
 load_dotenv()
 
-st.set_page_config(page_title="复初企业AI转型咨询助手", layout="wide")
-st.title("🤖 复初企业AI转型知识咨询系统 (公域生产版)")
+st.set_page_config(page_title="AI领导力洞察专属咨询系统", layout="wide")
+st.title("🤖 AI领导力洞察专属咨询系统 (唯一文档固化版)")
 
-# 初始化独一无二的 Session ID，确保不同浏览器标签页（不同用户）的数据完全独立
-if "user_session_id" not in st.session_state:
-    import uuid
-    st.session_state.user_session_id = str(uuid.uuid4())
-
-# --- 2. 统一的云端 API 客户端初始化 ---
+# --- 2. 统一的云端 API 客户端与固定知识库初始化 ---
 
 @st.cache_resource
 def get_llm_client(api_key: str):
@@ -27,70 +22,83 @@ def get_llm_client(api_key: str):
 
 @st.cache_resource
 def get_embedding_client():
-    """云端向量化/重排客户端（直接硬编码赋值字符串，不使用os.getenv）"""
-    # 直接将密钥内容作为字符串赋值给 api_key 变量
+    """云端向量化/重排客户端"""
     api_key = "sk-xkdxajipiwptbupuvnbmswcvuunrvlsbzwltjktnfnjgkjiz"
-    
     return OpenAI(api_key=api_key, base_url="https://api.siliconflow.cn/v1")
 
-@st.cache_resource
-def init_vector_db():
-    """磁盘持久化向量数据库"""
-    client = chromadb.PersistentClient(path="./chroma_db")
-    return client
-
-db_client = init_vector_db()
+# 全局初始化客户端
 embedding_client = get_embedding_client()
-
-
-
-
-# --- 3. 核心 RAG 功能函数 ---
 
 def split_into_chunks(content: str) -> List[str]:
     """文本切分逻辑"""
     cleaned_content = re.sub(r'\s*', '', content)
     chunks = re.split(r'(?=【\d{4}\.\d{1,2}\.\d{1,2}.*?】)', cleaned_content)
-    final_chunks = [chunk.strip() for chunk in chunks if chunk.strip()]
-    return final_chunks
+    return [chunk.strip() for chunk in chunks if chunk.strip()]
 
-def embed_chunks_via_api(chunks: List[str]) -> list:
-    """调用在线 API 生成文本向量（高防错生产版）"""
-    if not chunks:
-        return []
-        
+@st.cache_resource
+def init_fixed_vector_db():
+    """磁盘持久化向量数据库（带云端自动兜底初始化功能）"""
+    client = chromadb.PersistentClient(path="./chroma_db")
+    
+    # 使用 get_or_create_collection 确保即使不存在也不会触发 ValueError 崩溃
+    collection = client.get_or_create_collection(name="fixed_knowledge")
+    
+    # 【核心防御】如果发现集合是空的，说明 GitHub 上没传成功数据，直接在云端现场做一次自动无感入库
+    if collection.count() == 0:
+        filename = "AI领导力洞察-社区简版.md"
+        if os.path.exists(filename):
+            with open(filename, "r", encoding="utf-8") as f:
+                content = f.read()
+            chunks = split_into_chunks(content)
+            
+            # 云端实时生成向量
+            response = embedding_client.embeddings.create(
+                model="BAAI/bge-m3",
+                input=chunks
+            )
+            embeddings = [item.embedding for item in response.data]
+            
+            ids = [f"doc_{i}" for i in range(len(chunks))]
+            metadatas = []
+            for chunk in chunks:
+                urls = re.findall(r'(https://mp.weixin.qq.com/s/[^\s\)\"\'\>]+)', chunk)
+                url_str = urls[0] if urls else "无"
+                metadatas.append({"url": url_str})
+                
+            collection.add(ids=ids, documents=chunks, embeddings=embeddings, metadatas=metadatas)
+            
+    return collection
+
+# 激活加载数据库
+chromadb_collection = init_fixed_vector_db()
+
+
+# --- 3. 核心 RAG 功能函数 ---
+
+def embed_query_via_api(query: str) -> list:
+    """调用在线 API 为用户问题生成向量"""
     try:
-        # 【核心加固】对传入的每一个文本切片进行强制 UTF-8 清洗
-        # 显式消除可能夹杂的特殊非 ASCII / 隐藏字符或操作系统残留的乱码截断
-        cleaned_chunks = []
-        for chunk in chunks:
-            if isinstance(chunk, bytes):
-                c = chunk.decode('utf-8', errors='ignore')
-            else:
-                c = str(chunk).encode('utf-8', errors='ignore').decode('utf-8')
-            cleaned_chunks.append(c)
-
         response = embedding_client.embeddings.create(
             model="BAAI/bge-m3",
-            input=cleaned_chunks
+            input=[query]
         )
-        return [item.embedding for item in response.data]
+        return response.data[0].embedding
     except Exception as e:
-        # 如果依然失败，直接打印出最底层的 Python 调用栈，方便在前端秒杀问题
-        import traceback
-        error_detail = traceback.format_exc()
-        st.error("❌ 向量化请求在传输层被拦截，底层错误追踪如下：")
-        st.code(error_detail, language="python")
+        st.error("❌ 用户问题向量化失败: " + str(e))
         return []
 
 def retrieve(query: str, top_k: int) -> List[dict]:
-    """检索函数"""
-    query_embeddings = embed_chunks_via_api([query])
-    if not query_embeddings:
+    """从固化的专属库中检索知识"""
+    if chromadb_collection.count() == 0:
+        st.error("⚠️ 固定向量库数据为空，且未在根目录下找到【AI领导力洞察-社区简版.md】文本文件！")
+        return []
+
+    query_embedding = embed_query_via_api(query)
+    if not query_embedding:
         return []
         
     results = chromadb_collection.query(
-        query_embeddings=[query_embeddings[0]],
+        query_embeddings=[query_embedding],
         n_results=top_k
     )
     
@@ -137,18 +145,15 @@ def rerank_via_api(query: str, retrieved_items: List[dict], top_k: int) -> List[
 
 def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
     """调用 DeepSeek 思考模型生成最终答案"""
-    # 1. 先在外层把参考文档合并好，不用任何大括号或复杂拼接
-    context_text = "\n\n".join(chunks)
+    context_text = "\n\n".join(chunks) if chunks else "未检索到相关参考文档。"
     
-    # 2. 严格使用三双引号开头，三双引号结尾（彻底杜绝单双引号不匹配导致的闭合错误）
-    # 3. 放弃在大括号里写任何逻辑，改用最传统的 .format() 动态注入变量
-    system_prompt = """你是一个专业的企业AI转型资讯顾问，需要根据用户的问题和提供的参考文档回答用户的问题，给出合理的资讯建议。
+    system_prompt = """你是一个专业的AI领导力咨询顾问，需要根据用户的问题和提供的参考文档回答用户的问题。
 用户问题：{}
 参考文档：{}
 要求：
-1. 尽量使用参考文档里的信息回答。
-2. 回答要清晰、有条理，不要编造信息。
-3. 标注引用的参考文档。""".format(query, context_text)
+1. 严格并尽量仅使用参考文档里的信息回答。
+2. 回答要清晰、有条理，不要编造任何非参考文档里的信息。
+3. 标注引用的参考文档里的时间戳。""".format(query, context_text)
 
     try:
         response = client.chat.completions.create(
@@ -165,50 +170,8 @@ def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
 with st.sidebar:
     st.header("⚙️ 配置中心")
     api_key = st.text_input("DeepSeek API Key", value=os.getenv("OPENAI_API_KEY", ""), type="password")
-    st.caption(f"🔒 您的专属会话隔离ID: {st.session_state.user_session_id[:8]}...")
-    
     st.divider()
-    
-    st.header("📁 文档入库")
-    uploaded_file = st.file_uploader("上传企业资讯文档 (TXT/MD)", type=['txt', 'md'])
-    
-    if uploaded_file and st.button("开始解析并入库"):
-        file_bytes = uploaded_file.getvalue()
-        try:
-            content = file_bytes.decode('utf-16')
-        except UnicodeDecodeError:
-            try:
-                content = file_bytes.decode('gbk')
-            except Exception as e:
-                st.error(f"❌ 文件解码失败：{e}")
-                st.stop()
-
-        if not content.strip():
-           st.warning("⚠️ 读取到的文件内容为空。")
-           st.stop()
-
-        chunks = split_into_chunks(content)
-       
-        with st.spinner("正在通过云端 API 生成向量并安全存入隔离库..."):
-            embeddings = embed_chunks_via_api(chunks)
-            if not embeddings:
-                st.stop()
-                
-            ids = [f"{st.session_state.user_session_id}_{i}" for i in range(len(chunks))]
-            
-            metadatas = []
-            for chunk in chunks:
-                urls = re.findall(r'(https://mp.weixin.qq.com/s/[^\s\)\"\'\>]+)', chunk)
-                url_str = urls[0] if urls else "无"
-                metadatas.append({"url": url_str})
-
-            chromadb_collection.add(
-                ids=ids,
-                documents=chunks,
-                embeddings=embeddings,
-                metadatas=metadatas        
-            )
-        st.success(f"入库成功！您的专属知识库已存入 {len(chunks)} 个完整知识板块。")
+    st.success("✅ 《AI领导力洞察-社区简版》专属知识库已在线激活，随时可以提问。")
 
 # 主界面：对话历史渲染
 if "messages" not in st.session_state:
@@ -218,7 +181,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("询问关于企业AI转型的问题..."):
+if prompt := st.chat_input("输入关于《AI领导力洞察》的问题..."):
     if not api_key:
         st.error("请先在左侧配置中心输入你的 DeepSeek API Key")
     else:
@@ -228,22 +191,22 @@ if prompt := st.chat_input("询问关于企业AI转型的问题..."):
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.status("正在思考...", expanded=True) as status:
-                st.write("正在跨文档智能检索...")
+            with st.status("正在智能检索与深度思考...", expanded=True) as status:
+                st.write("正在从固化文档中精细检索相关切片...")
                 initial_items = retrieve(prompt, top_k=15) 
                 
-                st.write("正在精细化二次重排 (Reranking)...")
+                st.write("正在进行二次重排 (Reranking)...")
                 final_items = rerank_via_api(prompt, initial_items, top_k=3) 
                 
-                st.write("正在组织语言并调用 DeepSeek-R1 深度思考...")
+                st.write("正在调用 DeepSeek-R1 深度思考中...")
                 final_chunks_text = [item["text"] for item in final_items]
                 answer = generate_answer(prompt, final_chunks_text, llm_client)
                 
-                status.update(label="方案生成完毕！", state="complete", expanded=False)
+                status.update(label="解答生成完毕！", state="complete", expanded=False)
 
             st.markdown(answer)
             
-            with st.expander("查看本次回答参考的原始知识切片"):
+            with st.expander("查看本次回答参考的固定知识切片"):
                 for i, item in enumerate(final_items):
                     st.info(f"参考内容 {i+1}:\n\n{item['text']}")
                     if item['url'] != "无":
