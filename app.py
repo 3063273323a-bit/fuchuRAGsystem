@@ -60,7 +60,7 @@ def split_into_chunks(content: str) -> List[str]:
 
 @st.cache_resource
 def init_fixed_vector_db():
-    """磁盘持久化向量数据库（完美兼容新版 ChromaDB 语法）"""
+    """磁盘持久化向量数据库（已修正 ChromaDB 语法、文件解码并加入阿里百炼分批安全入库）"""
     client = chromadb.PersistentClient(path="./chroma_db")
     collection = client.get_or_create_collection("fixed_knowledge")
     
@@ -86,21 +86,35 @@ def init_fixed_vector_db():
                 
             chunks = split_into_chunks(content)
             
-            # 调用阿里云百炼的通用文本向量模型
-            response = embedding_client.embeddings.create(
-                model="text-embedding-v3",
-                input=chunks
-            )
-            embeddings = [item.embedding for item in response.data]
+            # 【核心修复】分批调用阿里百炼接口，单次 batch_size 严格限制在 10 以内
+            embeddings = []
+            batch_size = 10
+            for i in range(0, len(chunks), batch_size):
+                batch_chunks = chunks[i:i + batch_size]
+                try:
+                    response = embedding_client.embeddings.create(
+                        model="text-embedding-v3",
+                        input=batch_chunks
+                    )
+                    # 汇总当前批次的向量数据
+                    embeddings.extend([item.embedding for item in response.data])
+                except Exception as batch_error:
+                    st.error(f"❌ 批量向量化第 {i//batch_size + 1} 批数据时失败: {batch_error}")
+                    st.stop()
             
-            ids = [f"doc_{i}" for i in range(len(chunks))]
-            metadatas = []
-            for chunk in chunks:
-                urls = re.findall(r'(https://mp.weixin.qq.com/s/[^\s\)\"\'\>]+)', chunk)
-                url_str = urls[0] if urls else "无"
-                metadatas.append({"url": url_str})
-                
-            collection.add(ids=ids, documents=chunks, embeddings=embeddings, metadatas=metadatas)
+            # 确保向量数与文本数完全对齐后再入库
+            if len(chunks) == len(embeddings):
+                ids = [f"doc_{i}" for i in range(len(chunks))]
+                metadatas = []
+                for chunk in chunks:
+                    urls = re.findall(r'(https://mp.weixin.qq.com/s/[^\s\)\"\'\>]+)', chunk)
+                    url_str = urls[0] if urls else "无"
+                    metadatas.append({"url": url_str})
+                    
+                collection.add(ids=ids, documents=chunks, embeddings=embeddings, metadatas=metadatas)
+            else:
+                st.error("❌ 文本切片数与生成的向量总数不匹配，取消入库。")
+                st.stop()
             
     return collection
 
