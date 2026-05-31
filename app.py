@@ -27,8 +27,10 @@ def get_llm_client(api_key: str):
 
 @st.cache_resource
 def get_embedding_client():
-    """云端向量化/重排客户端（以硅基流动为例）"""
-    api_key = os.getenv("sk-xkdxajipiwptbupuvnbmswcvuunrvlsbzwltjktnfnjgkjiz")
+    """云端向量化/重排客户端（直接硬编码赋值字符串，不使用os.getenv）"""
+    # 直接将密钥内容作为字符串赋值给 api_key 变量
+    api_key = "sk-xkdxajipiwptbupuvnbmswcvuunrvlsbzwltjktnfnjgkjiz"
+    
     return OpenAI(api_key=api_key, base_url="https://api.siliconflow.cn/v1")
 
 @st.cache_resource
