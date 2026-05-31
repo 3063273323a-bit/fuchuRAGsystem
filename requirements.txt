@@ -4,4 +4,3 @@ openai
 python-dotenv
 numpy
 protobuf==3.20.3
-sentence-transformers
