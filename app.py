@@ -6,13 +6,12 @@ import re
 from typing import List
 from openai import OpenAI
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
 
 # --- 1. 环境与配置初始化 ---
 load_dotenv()
 
 st.set_page_config(page_title="AI领导力洞察专属咨询系统", layout="wide")
-st.title("🤖 AI领导力洞察专属咨询系统 (唯一文档固化版)")
+st.title("🤖 AI领导力洞察专属咨询系统 (大厂API加固版)")
 
 # --- 2. 统一的云端 API 客户端与固定知识库初始化 ---
 
@@ -22,12 +21,13 @@ def get_llm_client(api_key: str):
     return OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
 @st.cache_resource
-def get_local_embedding_model():
-    """在 Streamlit 服务器本地直接加载向量模型（零成本、零API限制）"""
-    # 首次启动会自动下载该超轻量顶级中文向量模型（约几百MB），后续直接秒级驻留内存
-    return SentenceTransformer('BAAI/bge-small-zh-v1.5')
-
-local_embed_model = get_local_embedding_model()
+def get_embedding_client():
+    """使用阿里云百炼作为顶级向量化/重排替代接口（极速、稳定、不锁死）"""
+    # 💡 程序员提示：去阿里云百炼官网控制台拿一个免费的 API KEY 贴在这里
+    api_key = "sk-01b029bf8c7a48adb43f521a6504a179" 
+    
+    # 无缝平替：同样完全兼容 OpenAI 协议规范
+    return OpenAI(api_key=api_key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
 
 # 全局初始化客户端
 embedding_client = get_embedding_client()
@@ -40,23 +40,35 @@ def split_into_chunks(content: str) -> List[str]:
 
 @st.cache_resource
 def init_fixed_vector_db():
-    """磁盘持久化向量数据库（带云端自动兜底初始化功能）"""
+    """磁盘持久化向量数据库（完美兼容新版 ChromaDB 语法）"""
     client = chromadb.PersistentClient(path="./chroma_db")
+    collection = client.get_or_create_collection("fixed_knowledge")
     
-    # 使用 get_or_create_collection 确保即使不存在也不会触发 ValueError 崩溃
-    collection = client.get_or_create_collection(name="fixed_knowledge")
-    
-    # 【核心防御】如果发现集合是空的，说明 GitHub 上没传成功数据，直接在云端现场做一次自动无感入库
+    # 如果发现集合是空的，云端全自动无感初始化
     if collection.count() == 0:
         filename = "AI领导力洞察-社区简版.md"
         if os.path.exists(filename):
-            with open(filename, "r", encoding="utf-16") as f:
-                content = f.read()
+            with open(filename, "rb") as f:
+                file_bytes = f.read()
+                
+            content = ""
+            decoding_strategies = ['utf-16', 'utf-8', 'gb18030', 'gbk']
+            for strategy in decoding_strategies:
+                try:
+                    content = file_bytes.decode(strategy)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if not content or not content.strip():
+                st.error("❌ 固化文档解码失败")
+                st.stop()
+                
             chunks = split_into_chunks(content)
             
-            # 云端实时生成向量
+            # 调用阿里云百炼的通用文本向量模型
             response = embedding_client.embeddings.create(
-                model="BAAI/bge-m3",
+                model="text-embedding-v3",
                 input=chunks
             )
             embeddings = [item.embedding for item in response.data]
@@ -78,19 +90,22 @@ chromadb_collection = init_fixed_vector_db()
 
 # --- 3. 核心 RAG 功能函数 ---
 
-def embed_chunks_locally(chunks: List[str]) -> list:
-    """本地直接计算向量，再也不用调用外部 API"""
-    if not chunks:
+def embed_query_via_api(query: str) -> list:
+    """调用百炼接口为用户问题生成向量"""
+    try:
+        response = embedding_client.embeddings.create(
+            model="text-embedding-v3",
+            input=[query]
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        st.error("❌ 用户问题向量化失败: " + str(e))
         return []
-    # 直接调用本地 CPU/GPU 进行向量化计算
-    embeddings = local_embed_model.encode(chunks, normalize_embeddings=True)
-    # 转换为 ChromaDB 要求的 list 格式
-    return [e.tolist() for e in embeddings]
 
 def retrieve(query: str, top_k: int) -> List[dict]:
     """从固化的专属库中检索知识"""
     if chromadb_collection.count() == 0:
-        st.error("⚠️ 固定向量库数据为空，且未在根目录下找到【AI领导力洞察-社区简版.md】文本文件！")
+        st.error("⚠️ 固定向量库数据为空！")
         return []
 
     query_embedding = embed_query_via_api(query)
@@ -114,34 +129,6 @@ def retrieve(query: str, top_k: int) -> List[dict]:
             "url": meta.get("url", "无") if meta else "无"
         })
     return retrieved_data
-
-def rerank_via_api(query: str, retrieved_items: List[dict], top_k: int) -> List[dict]:
-    """调用在线 Rerank API"""
-    if not retrieved_items: 
-        return []
-    
-    documents_to_rank = [item["text"] for item in retrieved_items]
-    
-    try:
-        response = embedding_client.post(
-            "/rerank",
-            json={
-                "model": "BAAI/bge-reranker-v2-m3",
-                "query": query,
-                "documents": documents_to_rank,
-                "top_n": top_k
-            }
-        ).json()
-        
-        results = response.get("results", [])
-        reranked_items = []
-        for res in results:
-            idx = res["index"]
-            reranked_items.append(retrieved_items[idx])
-        return reranked_items
-    except Exception as e:
-        st.warning(f"⚠️ Rerank 失败，已降级使用初筛顺序。错误: {e}")
-        return retrieved_items[:top_k]
 
 def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
     """调用 DeepSeek 思考模型生成最终答案"""
@@ -171,7 +158,7 @@ with st.sidebar:
     st.header("⚙️ 配置中心")
     api_key = st.text_input("DeepSeek API Key", value=os.getenv("OPENAI_API_KEY", ""), type="password")
     st.divider()
-    st.success("✅ 《AI领导力洞察-社区简版》专属知识库已在线激活，随时可以提问。")
+    st.success("✅ 固化知识库已在线激活，随时可以提问。")
 
 # 主界面：对话历史渲染
 if "messages" not in st.session_state:
@@ -192,11 +179,8 @@ if prompt := st.chat_input("输入关于《AI领导力洞察》的问题..."):
 
         with st.chat_message("assistant"):
             with st.status("正在智能检索与深度思考...", expanded=True) as status:
-                st.write("正在从固化文档中精细检索相关切片...")
-                initial_items = retrieve(prompt, top_k=15) 
-                
-                st.write("正在进行二次重排 (Reranking)...")
-                final_items = rerank_via_api(prompt, initial_items, top_k=3) 
+                st.write("正在跨阿里云百炼安全通道高速检索相关切片...")
+                final_items = retrieve(prompt, top_k=3) # 砍掉容易超时的额外rerank，初筛前3直接送给最强思维模型DeepSeek
                 
                 st.write("正在调用 DeepSeek-R1 深度思考中...")
                 final_chunks_text = [item["text"] for item in final_items]
