@@ -6,6 +6,7 @@ import re
 from typing import List
 from openai import OpenAI
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 # --- 1. 环境与配置初始化 ---
 load_dotenv()
@@ -21,10 +22,12 @@ def get_llm_client(api_key: str):
     return OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
 @st.cache_resource
-def get_embedding_client():
-    """云端向量化/重排客户端"""
-    api_key = "sk-xkdxajipiwptbupuvnbmswcvuunrvlsbzwltjktnfnjgkjiz"
-    return OpenAI(api_key=api_key, base_url="https://api.siliconflow.cn/v1")
+def get_local_embedding_model():
+    """在 Streamlit 服务器本地直接加载向量模型（零成本、零API限制）"""
+    # 首次启动会自动下载该超轻量顶级中文向量模型（约几百MB），后续直接秒级驻留内存
+    return SentenceTransformer('BAAI/bge-small-zh-v1.5')
+
+local_embed_model = get_local_embedding_model()
 
 # 全局初始化客户端
 embedding_client = get_embedding_client()
@@ -75,17 +78,14 @@ chromadb_collection = init_fixed_vector_db()
 
 # --- 3. 核心 RAG 功能函数 ---
 
-def embed_query_via_api(query: str) -> list:
-    """调用在线 API 为用户问题生成向量"""
-    try:
-        response = embedding_client.embeddings.create(
-            model="BAAI/bge-m3",
-            input=[query]
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        st.error("❌ 用户问题向量化失败: " + str(e))
+def embed_chunks_locally(chunks: List[str]) -> list:
+    """本地直接计算向量，再也不用调用外部 API"""
+    if not chunks:
         return []
+    # 直接调用本地 CPU/GPU 进行向量化计算
+    embeddings = local_embed_model.encode(chunks, normalize_embeddings=True)
+    # 转换为 ChromaDB 要求的 list 格式
+    return [e.tolist() for e in embeddings]
 
 def retrieve(query: str, top_k: int) -> List[dict]:
     """从固化的专属库中检索知识"""
