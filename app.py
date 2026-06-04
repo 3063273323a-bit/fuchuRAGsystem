@@ -12,6 +12,7 @@ load_dotenv()
 
 st.set_page_config(page_title="AI领导力洞察专属咨询系统", layout="wide")
 st.title("🤖 AI领导力洞察专属咨询系统")
+api_key1 = "sk-6bd8421277f741d08d80c25dbb189490"
 
 # --- 2. 统一的云端 API 客户端与固定知识库初始化 ---
 
