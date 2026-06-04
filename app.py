@@ -203,7 +203,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
         
 if prompt := st.chat_input("输入关于《AI领导力洞察》的问题..."):
-        llm_client = get_llm_client(api_key)
+        llm_client = get_llm_client(api_key1)
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
