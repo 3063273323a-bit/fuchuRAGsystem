@@ -18,6 +18,7 @@ st.title("🤖 AI领导力洞察专属咨询系统")
 @st.cache_resource
 def get_llm_client(api_key: str):
     """DeepSeek 大模型客户端"""
+    api_key = "sk-6bd8421277f741d08d80c25dbb189490"
     return OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
 @st.cache_resource
@@ -190,7 +191,6 @@ def generate_answer(query: str, chunks: list[str], client: OpenAI) -> str:
 # --- 4. Streamlit 前端交互界面 ---
 with st.sidebar:
     st.header("⚙️ 配置中心")
-    api_key = st.text_input("DeepSeek API Key", value=os.getenv("OPENAI_API_KEY", ""), type="password")
     st.divider()
     st.success("✅ 固化知识库已在线激活，随时可以提问。")
 
@@ -202,14 +202,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("输入关于《AI领导力洞察》的问题..."):
-    if not api_key:
-        st.error("请先在左侧配置中心输入你的 DeepSeek API Key")
-    else:
-        llm_client = get_llm_client(api_key)
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+
 
         with st.chat_message("assistant"):
             with st.status("正在智能检索与深度思考...", expanded=True) as status:
