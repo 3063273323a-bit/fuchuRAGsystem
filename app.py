@@ -18,8 +18,8 @@ st.title("🤖 AI领导力洞察专属咨询系统")
 @st.cache_resource
 def get_llm_client(api_key: str):
     """DeepSeek 大模型客户端"""
-    api_key = "sk-6bd8421277f741d08d80c25dbb189490"
-    return OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+    api_key1 = "sk-6bd8421277f741d08d80c25dbb189490"
+    return OpenAI(api_key=api_key1, base_url="https://api.deepseek.com")
 
 @st.cache_resource
 def get_embedding_client():
