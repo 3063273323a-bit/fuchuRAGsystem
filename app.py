@@ -195,37 +195,54 @@ with st.sidebar:
     st.divider()
     st.success("✅ 固化知识库已在线激活，随时可以提问。")
 
-# 主界面：对话历史渲染
+# 4.1 初始化会话状态中的消息历史记录
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# 4.2 每次渲染页面时，先绘制所有历史消息（包括历史参考切片）
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        
-if prompt := st.chat_input("输入关于《AI领导力洞察》的问题..."):
-        llm_client = get_llm_client(api_key1)
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-
-
-        with st.chat_message("assistant"):
-            with st.status("正在智能检索与深度思考...", expanded=True) as status:
-                st.write("正在跨阿里云百炼安全通道高速检索相关切片...")
-                final_items = retrieve(prompt, top_k=3) # 砍掉容易超时的额外rerank，初筛前3直接送给最强思维模型DeepSeek
-                
-                st.write("正在调用 DeepSeek-R1 深度思考中...")
-                final_chunks_text = [item["text"] for item in final_items]
-                answer = generate_answer(prompt, final_chunks_text, llm_client)
-                
-                status.update(label="解答生成完毕！", state="complete", expanded=False)
-
-            st.markdown(answer)
-            
+        # 如果历史消息中包含参考切片信息，一并渲染出来
+        if "final_items" in message:
             with st.expander("查看本次回答参考的固定知识切片"):
-                for i, item in enumerate(final_items):
+                for i, item in enumerate(message["final_items"]):
                     st.info(f"参考内容 {i+1}:\n\n{item['text']}")
                     if item['url'] != "无":
                         st.markdown(f"🔗 **文章原链:** [{item['url']}]({item['url']})")
+        
+# 4.3 接收用户新输入
+if prompt := st.chat_input("输入关于《AI领导力洞察》的问题..."):
+    llm_client = get_llm_client(api_key1)
+    
+    # 立即渲染用户当前输入并存入 Session State
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # 渲染 AI 的即时回答逻辑
+    with st.chat_message("assistant"):
+        with st.status("正在智能检索与深度思考...", expanded=True) as status:
+            st.write("正在跨阿里云百炼安全通道高速检索相关切片...")
+            final_items = retrieve(prompt, top_k=3)
+            
+            st.write("正在调用 DeepSeek-R1 深度思考中...")
+            final_chunks_text = [item["text"] for item in final_items]
+            answer = generate_answer(prompt, final_chunks_text, llm_client)
+            
+            status.update(label="解答生成完毕！", state="complete", expanded=False)
+
+        # 展现当前生成的回答与参考资料
+        st.markdown(answer)
+        with st.expander("查看本次回答参考的固定知识切片"):
+            for i, item in enumerate(final_items):
+                st.info(f"参考内容 {i+1}:\n\n{item['text']}")
+                if item['url'] != "无":
+                    st.markdown(f"🔗 **文章原链:** [{item['url']}]({item['url']})")
+        
+        # 核心改动：把 AI 的回答以及这次检索到的知识切片（final_items）一起追加入历史消息中，下次刷新就不丢了
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": answer,
+            "final_items": final_items
+        })
